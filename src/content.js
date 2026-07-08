@@ -1197,51 +1197,63 @@
     const tokensToProcess = uniqueTokens.slice(0, maxTokens);
 
     for (const token of tokensToProcess) {
-      // Find first element containing this token
+      // Find ALL elements containing this token (not just first)
       const elements = document.querySelectorAll('.raw-event, td.event');
-      let targetElement = null;
+      const targetElements = [];
 
       for (const el of elements) {
         if (el.textContent.includes(token)) {
-          targetElement = el;
-          break;
-        }
-      }
+          // Check if already detokenized in this specific element
+          const existingBlock = el.querySelector('.detokenized-values-block');
+          let alreadyExists = false;
 
-      if (!targetElement) continue;
+          if (existingBlock) {
+            const entries = existingBlock.querySelectorAll('.detokenized-value-entry');
+            for (const entry of entries) {
+              const entryToken = entry.getAttribute('data-token');
+              if (entryToken === token) {
+                alreadyExists = true;
+                break;
+              }
+            }
+          }
 
-      // Check if already detokenized
-      const existingBlock = targetElement.querySelector('.detokenized-values-block');
-      if (existingBlock) {
-        const entries = existingBlock.querySelectorAll('.detokenized-value-entry');
-        let alreadyExists = false;
-        for (const entry of entries) {
-          const entryToken = entry.getAttribute('data-token');
-          if (entryToken === token) {
-            alreadyExists = true;
-            break;
+          if (!alreadyExists) {
+            targetElements.push(el);
           }
         }
-        if (alreadyExists) continue;
       }
 
-      // Show loading state immediately
-      await addLoadingEntryToPage(targetElement, token);
+      if (targetElements.length === 0) continue;
 
-      // Detokenize this token (async, don't wait)
+      // Show loading state immediately in ALL matching elements
+      for (const targetElement of targetElements) {
+        await addLoadingEntryToPage(targetElement, token);
+      }
+
+      // Detokenize this token once (async, don't wait)
       chrome.runtime.sendMessage({
         action: 'detokenize',
         token: token
       }).then(async (response) => {
         if (response && response.success) {
-          await replaceLoadingWithResult(targetElement, token, response.detokenizedValue);
+          // Update ALL matching elements with result
+          for (const targetElement of targetElements) {
+            await replaceLoadingWithResult(targetElement, token, response.detokenizedValue);
+          }
           await saveToHistory(token, response.detokenizedValue);
         } else {
-          await replaceLoadingWithError(targetElement, token, response?.error || 'Failed');
+          // Update ALL matching elements with error
+          for (const targetElement of targetElements) {
+            await replaceLoadingWithError(targetElement, token, response?.error || 'Failed');
+          }
         }
       }).catch(async (error) => {
         console.error('Auto-detokenize failed for token:', token.substring(0, 30), error);
-        await replaceLoadingWithError(targetElement, token, error.message);
+        // Update ALL matching elements with error
+        for (const targetElement of targetElements) {
+          await replaceLoadingWithError(targetElement, token, error.message);
+        }
       });
 
       // Small delay before starting next token
