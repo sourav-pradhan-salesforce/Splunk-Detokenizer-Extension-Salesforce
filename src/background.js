@@ -387,14 +387,15 @@ async function detokenizeWithTab(token) {
 
             // Look in Results table after "Unique Run ID"
             // Search HTML first (has better structure), fallback to text
-            // Increased range to capture full Results table
-            let resultsSection = bodyHTML.match(/Unique Run ID[\s\S]{0,10000}/i);
+            // Increased range to capture full Results table (up to 50KB for large results)
+            let resultsSection = bodyHTML.match(/Unique Run ID[\s\S]{0,50000}/i);
             if (!resultsSection) {
-              resultsSection = bodyText.match(/Unique Run ID[\s\S]{0,5000}/i);
+              resultsSection = bodyText.match(/Unique Run ID[\s\S]{0,25000}/i);
             }
             console.log('Results section found:', !!resultsSection);
             if (resultsSection) {
               const resultHTML = resultsSection[0];
+              console.log('Results section length:', resultHTML.length);
               console.log('Results section content (first 800 chars):', resultHTML.substring(0, 800));
 
               // Extract first dataCell content (contains the detokenized result)
@@ -416,7 +417,12 @@ async function detokenizeWithTab(token) {
                   .replace(/&nbsp;/g, ' ')        // Decode &nbsp;
                   .trim();
 
-                console.log('✅ Extracted from dataCell:', result);
+                if (result.length === 0) {
+                  console.log('⚠️ DataCell empty after decoding. Raw:', dataCellMatch[1].substring(0, 200));
+                } else {
+                  console.log('✅ Extracted from dataCell. Length:', result.length);
+                  console.log('Preview:', result.substring(0, 200) + (result.length > 200 ? '...' : ''));
+                }
                 return { value: result };
               }
 
@@ -535,75 +541,54 @@ async function detokenizeWithTab(token) {
 
 // Wait for tab to load the correct page (not login/redirect pages)
 function waitForTabComplete(tabId) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     // Increase timeout to 2 minutes to give user time to login
     const timeout = setTimeout(() => {
       reject(new Error('Tab load timeout after 2 minutes. Please ensure you are logged into bt1.my.salesforce.com'));
     }, 120000);
 
-    let lastCheckTime = Date.now();
+    // Poll tab status every second instead of relying on onUpdated events
+    // onUpdated can miss events for unfocused windows
+    const pollInterval = setInterval(async () => {
 
-    async function listener(updatedTabId, changeInfo, tab) {
-      if (updatedTabId !== tabId) return;
+      try {
+        // Get current tab info
+        const currentTab = await chrome.tabs.get(tabId);
+        const url = currentTab.url;
+        const status = currentTab.status;
 
-      // Check on every status update
-      if (changeInfo.status === 'complete' || changeInfo.url) {
-        const now = Date.now();
+        console.log('Polling tab - status:', status, 'URL:', url ? url.substring(0, 100) : 'N/A');
 
-        // Throttle checks to avoid rapid fire (wait at least 1 second between checks)
-        if (now - lastCheckTime < 1000) {
-          return;
+        // Check if we're on the actual tokenizer page (not login/redirect)
+        const isTokenizerPage = url && url.includes('/admin/framework/action.apexp');
+
+        // All known redirect/auth URLs
+        const isRedirect = url && (
+          url.includes('?ec=') ||
+          url.includes('&startURL=') ||
+          url.includes('&retURL=') ||
+          url.includes('/idp/') ||
+          url.includes('/saml/') ||
+          url.includes('/secur/frontdoor') ||
+          url.includes('central.my.salesforce.com') ||
+          url.includes('login') ||
+          url.includes('authn-request')
+        );
+
+        if (isTokenizerPage && !isRedirect && status === 'complete') {
+          console.log('✅ Tokenizer page loaded and complete!');
+          clearTimeout(timeout);
+          clearInterval(pollInterval);
+          setTimeout(() => resolve(), 2000);
         }
-        lastCheckTime = now;
-
-        try {
-          // Get current tab info
-          const currentTab = await chrome.tabs.get(tabId);
-          const url = currentTab.url;
-
-          console.log('Tab status:', changeInfo.status, 'URL:', url);
-
-          // Check if we're on the actual tokenizer page (not login/redirect)
-          // The correct URL is: https://bt1.my.salesforce.com/admin/framework/action.apexp?entryPoint=BlackTab_UI&actionName=Detokenizer
-          const isTokenizerPage = url && url.includes('/admin/framework/action.apexp');
-
-          // All known redirect/auth URLs
-          const isRedirect = url && (
-            url.includes('?ec=') ||           // Salesforce redirect
-            url.includes('&startURL=') ||     // Salesforce start URL param
-            url.includes('&retURL=') ||       // Salesforce return URL param
-            url.includes('/idp/') ||          // Identity provider
-            url.includes('/saml/') ||         // SAML auth
-            url.includes('/secur/frontdoor') || // Salesforce SSO frontdoor
-            url.includes('central.my.salesforce.com') || // Central SSO
-            url.includes('login') ||          // Login pages
-            url.includes('authn-request')     // Auth request pages
-          );
-
-          if (isTokenizerPage && !isRedirect && changeInfo.status === 'complete') {
-            console.log('✅ Tokenizer page loaded and complete!');
-            clearTimeout(timeout);
-            chrome.tabs.onUpdated.removeListener(listener);
-
-            // Give page a moment to fully initialize
-            setTimeout(() => resolve(), 2000);
-          } else if (isRedirect) {
-            console.log('⏳ On login/auth/redirect page, waiting...', url.substring(0, 150));
-            // Keep waiting - user needs to login or page needs to redirect
-          } else if (isTokenizerPage && isRedirect) {
-            console.log('⏳ On tokenizer redirect page, waiting for actual page...', url.substring(0, 150));
-            // Still on redirect, keep waiting
-          } else if (changeInfo.status === 'complete' && url) {
-            console.log('⚠️ Page loaded but URL not recognized:', url.substring(0, 150));
-            // Log unrecognized URLs for debugging
-          }
-        } catch (error) {
-          console.error('Error checking tab:', error);
-        }
+      } catch (error) {
+        console.error('Error polling tab:', error);
+        // Tab might be closed, stop polling
+        clearTimeout(timeout);
+        clearInterval(pollInterval);
+        reject(error);
       }
-    }
-
-    chrome.tabs.onUpdated.addListener(listener);
+    }, 1000); // Poll every second
   });
 }
 
