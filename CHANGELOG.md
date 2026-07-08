@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-07-09
+
+### Fixed
+- Large token support: increased result capture from 10KB to 50KB
+- Background window polling: replaced `onUpdated` event listener with 1-second polling
+- Unfocused window timeout: polling works reliably for background windows
+- Added result length and preview logging for debugging
+
+### Changed
+- `waitForTabComplete()` now polls tab status every second instead of event-based
+- Result section match increased from 10KB to 50KB (HTML) and 25KB (text)
+- Better logging: shows result length and preview instead of full content
+
 ## [1.0.0] - 2026-07-09
 
 ### Added
