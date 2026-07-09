@@ -219,7 +219,10 @@
 
     const madeWith = document.createElement('div');
     madeWith.className = 'footer-made-with';
-    madeWith.innerHTML = 'Made with ❤️ by <strong>Team Ashish</strong>';
+    madeWith.appendChild(document.createTextNode('Made with ❤️ by '));
+    const madeWithStrong = document.createElement('strong');
+    madeWithStrong.textContent = 'Sales AMER Signature Team';
+    madeWith.appendChild(madeWithStrong);
 
     // Create a single row for feedback and links
     const footerRow = document.createElement('div');
