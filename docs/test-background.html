@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Test Background Script</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+
+    .test-section {
+      margin: 20px 0;
+      padding: 15px;
+      background: #f9f9f9;
+      border-left: 4px solid #667eea;
+    }
+
+    button {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      margin: 5px;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    .result {
+      margin-top: 10px;
+      padding: 10px;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow: auto;
+    }
+
+    .success { color: green; }
+    .error { color: red; }
+    .info { color: blue; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 Extension Background Script Test</h1>
+
+    <p>Use this page to test if your extension's background script is responding correctly.</p>
+
+    <div class="test-section">
+      <h3>Test 1: Check Extension Installation</h3>
+      <button onclick="testExtensionInstalled()">Run Test</button>
+      <div id="test1-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h3>Test 2: Send Simple Message</h3>
+      <button onclick="testSimpleMessage()">Run Test</button>
+      <div id="test2-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h3>Test 3: Test Detokenize Message</h3>
+      <input type="text" id="testToken" placeholder="Enter test token" value="A-202607-test123" style="width: 400px; padding: 8px; margin-right: 10px;">
+      <button onclick="testDetokenize()">Run Test</button>
+      <div id="test3-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h3>Test 4: Check Salesforce Authentication</h3>
+      <button onclick="testSalesforceAuth()">Run Test</button>
+      <div id="test4-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h3>Instructions:</h3>
+      <ol>
+        <li>Make sure the extension is installed and enabled at <code>chrome://extensions/</code></li>
+        <li>Click the "Service Worker" link under the extension to open its console</li>
+        <li>Run these tests and compare results in both this page and the Service Worker console</li>
+        <li>If any test fails, reload the extension and try again</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    function log(elementId, message, type = 'info') {
+      const element = document.getElementById(elementId);
+      const timestamp = new Date().toLocaleTimeString();
+      const className = type === 'success' ? 'success' : type === 'error' ? 'error' : 'info';
+      element.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+      console.log(`[${timestamp}] ${message}`);
+    }
+
+    function clearLog(elementId) {
+      document.getElementById(elementId).innerHTML = '';
+    }
+
+    async function testExtensionInstalled() {
+      clearLog('test1-result');
+
+      try {
+        log('test1-result', 'Checking if chrome.runtime is available...', 'info');
+
+        if (typeof chrome === 'undefined' || !chrome.runtime) {
+          log('test1-result', '❌ FAIL: chrome.runtime not available', 'error');
+          log('test1-result', 'Extension is not installed or not loaded on this page', 'error');
+          return;
+        }
+
+        log('test1-result', '✅ chrome.runtime is available', 'success');
+        log('test1-result', `Extension ID: ${chrome.runtime.id}`, 'info');
+        log('test1-result', '✅ PASS: Extension is installed', 'success');
+
+      } catch (error) {
+        log('test1-result', `❌ ERROR: ${error.message}`, 'error');
+      }
+    }
+
+    async function testSimpleMessage() {
+      clearLog('test2-result');
+
+      try {
+        log('test2-result', 'Sending test message to background script...', 'info');
+
+        const response = await chrome.runtime.sendMessage({
+          action: 'test',
+          timestamp: Date.now()
+        });
+
+        if (response) {
+          log('test2-result', `✅ Received response: ${JSON.stringify(response)}`, 'success');
+        } else {
+          log('test2-result', '⚠️ No response received (this is ok if background doesn\'t handle "test" action)', 'info');
+        }
+
+        log('test2-result', '✅ PASS: Background script is responding', 'success');
+
+      } catch (error) {
+        log('test2-result', `❌ ERROR: ${error.message}`, 'error');
+
+        if (error.message.includes('Could not establish connection')) {
+          log('test2-result', '❌ Background script is not responding!', 'error');
+          log('test2-result', '💡 Solution: Go to chrome://extensions/ and click RELOAD on the extension', 'info');
+        }
+      }
+    }
+
+    async function testDetokenize() {
+      clearLog('test3-result');
+
+      try {
+        const token = document.getElementById('testToken').value;
+
+        if (!token) {
+          log('test3-result', '❌ Please enter a test token', 'error');
+          return;
+        }
+
+        log('test3-result', `Sending detokenize request for: ${token}`, 'info');
+        log('test3-result', 'This will open a new tab to the detokenizer...', 'info');
+
+        const startTime = Date.now();
+
+        const response = await Promise.race([
+          chrome.runtime.sendMessage({
+            action: 'detokenize',
+            token: token
+          }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout after 60 seconds')), 60000)
+          )
+        ]);
+
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        log('test3-result', `Response received in ${duration} seconds`, 'info');
+        log('test3-result', `Response: ${JSON.stringify(response, null, 2)}`, 'info');
+
+        if (response && response.success) {
+          log('test3-result', `✅ PASS: Detokenized value: ${response.detokenizedValue}`, 'success');
+        } else {
+          log('test3-result', `❌ FAIL: ${response?.error || 'Unknown error'}`, 'error');
+        }
+
+      } catch (error) {
+        log('test3-result', `❌ ERROR: ${error.message}`, 'error');
+
+        if (error.message.includes('Could not establish connection')) {
+          log('test3-result', '💡 Background script crashed or not running', 'error');
+          log('test3-result', '💡 Solution: Reload extension at chrome://extensions/', 'info');
+        }
+      }
+    }
+
+    async function testSalesforceAuth() {
+      clearLog('test4-result');
+
+      try {
+        log('test4-result', 'Checking Salesforce cookies...', 'info');
+
+        const cookies = await chrome.cookies.getAll({
+          domain: '.salesforce.com'
+        });
+
+        if (cookies.length === 0) {
+          log('test4-result', '❌ FAIL: No Salesforce cookies found', 'error');
+          log('test4-result', '💡 Solution: Login at https://bt1.my.salesforce.com', 'info');
+        } else {
+          log('test4-result', `✅ Found ${cookies.length} Salesforce cookies`, 'success');
+          log('test4-result', 'Cookie names:', 'info');
+          cookies.forEach(cookie => {
+            log('test4-result', `  - ${cookie.name}`, 'info');
+          });
+          log('test4-result', '✅ PASS: Authenticated to Salesforce', 'success');
+        }
+
+      } catch (error) {
+        log('test4-result', `❌ ERROR: ${error.message}`, 'error');
+      }
+    }
+
+    // Auto-run first test on page load
+    window.addEventListener('load', () => {
+      setTimeout(testExtensionInstalled, 500);
+    });
+  </script>
+</body>
+</html>

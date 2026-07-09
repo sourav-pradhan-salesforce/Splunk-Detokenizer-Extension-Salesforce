@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Splunk BlackTab Detokenizer",
+  "version": "4.0.0",
+  "description": "Detokenize values from Splunk using BlackTab Detokenizer tool (Background Processing)",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "cookies",
+    "contextMenus",
+    "clipboardWrite",
+    "clipboardRead",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://splunk-web.log-analytics.monitoring.aws-esvc1-useast2.aws.sfdc.cl/*",
+    "https://bt1.my.salesforce.com/*",
+    "https://central.my.salesforce.com/*",
+    "https://*.salesforce.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://splunk-web.log-analytics.monitoring.aws-esvc1-useast2.aws.sfdc.cl/*"],
+      "js": ["src/content.js"],
+      "css": ["src/styles.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["detokenizer-frame.html"],
+      "matches": ["https://splunk-web.log-analytics.monitoring.aws-esvc1-useast2.aws.sfdc.cl/*"]
+    }
+  ]
+}
