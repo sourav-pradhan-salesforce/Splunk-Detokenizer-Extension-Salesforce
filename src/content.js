@@ -210,7 +210,7 @@
     madeWith.className = 'footer-made-with';
     madeWith.appendChild(document.createTextNode('Made with ❤️ by '));
     const madeWithStrong = document.createElement('strong');
-    madeWithStrong.textContent = 'Sales AMER Signature Team';
+    madeWithStrong.textContent = 'Sales AMER Team';
     madeWith.appendChild(madeWithStrong);
 
     // Create a single row for feedback and links
