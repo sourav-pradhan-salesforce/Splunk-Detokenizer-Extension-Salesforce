@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Splunk BlackTab Detokenizer",
-  "version": "4.1.0",
+  "version": "4.0.0",
   "description": "Detokenize values from Splunk using BlackTab Detokenizer tool (Background Processing)",
   "permissions": [
     "activeTab",

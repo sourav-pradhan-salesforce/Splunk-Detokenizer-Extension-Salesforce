@@ -5,29 +5,259 @@ console.log('Splunk Detokenizer Background Script loaded');
 const CACHE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 const MAX_CACHE_ENTRIES = 100; // Prevent unlimited growth
 
+// Batch queue — collect tokens for a short window then process all in one tab
+const batchQueue = []; // [{token, resolve, reject}]
+let batchTimer = null;
+let batchRunning = false;
+
+function enqueueBatch(token) {
+  return new Promise((resolve, reject) => {
+    batchQueue.push({ token, resolve, reject });
+    if (!batchTimer) {
+      batchTimer = setTimeout(flushBatch, 300); // wait 300ms to collect more tokens
+    }
+  });
+}
+
+async function flushBatch() {
+  batchTimer = null;
+  if (batchRunning || batchQueue.length === 0) return;
+  batchRunning = true;
+
+  // Drain the current queue snapshot
+  const batch = batchQueue.splice(0, batchQueue.length);
+  console.log(`🚀 Processing batch of ${batch.length} tokens in one tab`);
+
+  // Separate cached vs uncached
+  const results = {};
+  const uncached = [];
+  for (const item of batch) {
+    const cached = await getCachedResult(item.token);
+    if (cached) {
+      results[item.token] = { success: true, detokenizedValue: cached, fromCache: true };
+    } else {
+      uncached.push(item.token);
+    }
+  }
+
+  // Detokenize all uncached in one tab
+  if (uncached.length > 0) {
+    try {
+      const batchResults = await detokenizeBatch(uncached);
+      for (const [token, value] of Object.entries(batchResults)) {
+        await cacheResult(token, value);
+        results[token] = { success: true, detokenizedValue: value };
+      }
+      // Mark failed ones
+      for (const token of uncached) {
+        if (!results[token]) {
+          results[token] = { success: false, error: 'Not found in response' };
+        }
+      }
+    } catch (err) {
+      for (const token of uncached) {
+        results[token] = { success: false, error: err.message };
+      }
+    }
+  }
+
+  // Resolve all promises
+  for (const item of batch) {
+    item.resolve(results[item.token] || { success: false, error: 'Unknown error' });
+  }
+
+  batchRunning = false;
+
+  // If more items arrived while we were running, flush again
+  if (batchQueue.length > 0) {
+    batchTimer = setTimeout(flushBatch, 100);
+  }
+}
+
 // Handle messages from content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Background received message:', request);
+  console.log('Background received message:', request.action);
 
   if (request.action === 'detokenize') {
-    console.log('Processing detokenize request for token:', request.token?.substring(0, 10) + '...');
+    enqueueBatch(request.token)
+      .then(result => sendResponse(result))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
 
-    // Handle async operation
-    handleDetokenize(request.token)
-      .then(result => {
-        console.log('Detokenization complete, sending response:', result);
-        sendResponse(result);
-      })
-      .catch(error => {
-        console.error('Detokenization error:', error);
-        sendResponse({ success: false, error: error.message });
-      });
-
-    return true; // Keep message channel open for async response
+  if (request.action === 'detokenizeBatch') {
+    // Clear previous results, then process — results pushed progressively via storage
+    chrome.storage.local.set({ autoDetokenResults: {} });
+    handleBatchDetokenize(request.tokens).catch(err => console.error('Batch error:', err));
+    sendResponse({ started: true });
+    return false;
   }
 
   return false;
 });
+
+// Handle a batch of tokens — open ONE tab, process each token sequentially, close tab
+async function handleBatchDetokenize(tokens) {
+  const results = {};
+
+  // Serve cached tokens immediately
+  const uncached = [];
+  for (const token of tokens) {
+    const cached = await getCachedResult(token);
+    if (cached) {
+      results[token] = cached;
+    } else {
+      uncached.push(token);
+    }
+  }
+
+  if (uncached.length === 0) {
+    console.log('✅ All tokens served from cache');
+    await chrome.storage.local.set({ autoDetokenResults: results });
+    return results;
+  }
+
+  console.log(`🚀 Processing ${uncached.length} tokens in ONE tab sequentially`);
+
+  const url = 'https://bt1.my.salesforce.com/admin/framework/action.apexp?entryPoint=BlackTab_UI&actionName=Detokenizer';
+
+  await new Promise((resolve, reject) => {
+    chrome.windows.create({ url, type: 'popup', focused: false, width: 500, height: 400 }, async (win) => {
+      if (!win || !win.tabs || !win.tabs[0]) { reject(new Error('Failed to create window')); return; }
+      const tabId = win.tabs[0].id;
+      const windowId = win.id;
+
+      try {
+        await waitForTabComplete(tabId);
+        await sleep(3000);
+
+        // Set Action to Read once
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const selects = document.querySelectorAll('select');
+            for (const select of selects) {
+              const opts = Array.from(select.options);
+              if (opts.some(o => o.value === 'Read' || o.textContent.trim() === 'Read')) {
+                select.value = 'Read';
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                return;
+              }
+            }
+          }
+        });
+        await sleep(2000);
+
+        // Set Strategy once
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const selects = document.querySelectorAll('select');
+            for (const select of selects) {
+              const opts = Array.from(select.options);
+              const shortTerm = opts.find(o => o.value.includes('SHORT_TERM') || o.textContent.includes('SHORT_TERM'));
+              if (shortTerm) { select.value = shortTerm.value; select.dispatchEvent(new Event('change', { bubbles: true })); return; }
+            }
+          }
+        });
+        await sleep(2000);
+
+        // Flush cached results immediately to storage so content script can start replacing
+        if (Object.keys(results).length > 0) {
+          await chrome.storage.local.set({ autoDetokenResults: { ...results } });
+        }
+
+        // Process each token one at a time in the same tab
+        for (const token of uncached) {
+          const cleanToken = token.replace(/\s+/g, '');
+          console.log(`Processing token ${uncached.indexOf(token) + 1}/${uncached.length}: ${cleanToken.substring(0, 20)}...`);
+
+          // Fill textarea and click Run
+          const fillResult = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (t) => {
+              const textareas = document.querySelectorAll('textarea');
+              for (const ta of textareas) {
+                const style = window.getComputedStyle(ta);
+                if (style.display !== 'none' && style.visibility !== 'hidden') {
+                  ta.value = t;
+                  ta.dispatchEvent(new Event('input', { bubbles: true }));
+                  ta.dispatchEvent(new Event('change', { bubbles: true }));
+                  const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
+                  for (const btn of buttons) {
+                    if ((btn.textContent || btn.value || '').toLowerCase().includes('run')) {
+                      btn.click();
+                      return true;
+                    }
+                  }
+                }
+              }
+              return false;
+            },
+            args: [cleanToken]
+          });
+
+          if (!fillResult?.[0]?.result) { console.warn('Could not fill/run for token', cleanToken.substring(0, 20)); continue; }
+
+          // Wait for result
+          let found = false;
+          for (let i = 0; i < 20; i++) {
+            await sleep(1000);
+            const check = await chrome.scripting.executeScript({
+              target: { tabId },
+              func: () => {
+                const html = document.body.innerHTML || '';
+                const resultsMatch = html.match(/Unique Run ID[\s\S]{100,}/i);
+                if (resultsMatch && (resultsMatch[0].includes('@') || resultsMatch[0].match(/<td[^>]*>[^<]{10,}<\/td>/))) return true;
+                if (html.match(/Errors[^<]*<[^>]*>([A-Z_]+)</i)) return true;
+                return false;
+              }
+            });
+            if (check?.[0]?.result) { found = true; break; }
+          }
+
+          // Extract result
+          const extract = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const html = document.body.innerHTML || '';
+              const section = html.match(/Unique Run ID[\s\S]{0,50000}/i);
+              if (section) {
+                const cellMatch = section[0].match(/<td[^>]*class="dataCell"[^>]*>([\s\S]*?)<\/td>/i);
+                if (cellMatch) {
+                  const val = cellMatch[1].replace(/<[^>]+>/g, '').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&nbsp;/g,' ').trim();
+                  if (val) return val;
+                }
+                const emails = section[0].replace(/<[^>]+>/g,' ').match(/([\w.-]+@[\w.-]+\.\w+)/g);
+                if (emails) { const nonSF = emails.find(e => !e.includes('salesforce.com')); return nonSF || emails[0]; }
+              }
+              return null;
+            }
+          });
+
+          const value = extract?.[0]?.result;
+          if (value) {
+            results[token] = value;
+            await cacheResult(token, value);
+            console.log(`✅ Token ${uncached.indexOf(token) + 1}: ${value}`);
+            // Push result immediately so content script can replace inline without waiting
+            const current = (await chrome.storage.local.get(['autoDetokenResults'])).autoDetokenResults || {};
+            current[token] = value;
+            await chrome.storage.local.set({ autoDetokenResults: current });
+          }
+        }
+
+        chrome.windows.remove(windowId).catch(() => {});
+        resolve();
+      } catch (err) {
+        chrome.windows.remove(windowId).catch(() => {});
+        reject(err);
+      }
+    });
+  });
+
+  return results;
+}
 
 // Main detokenization handler
 async function handleDetokenize(token) {
@@ -135,6 +365,22 @@ async function cacheResult(token, value) {
   }
 }
 
+// Detokenize multiple tokens in ONE tab — returns {token: value} map
+async function detokenizeBatch(tokens) {
+  const cleanTokens = tokens.map(t => t.replace(/\s+/g, ''));
+  const combined = cleanTokens.join('\n');
+  console.log(`🚀 Batch: ${cleanTokens.length} tokens in one tab`);
+
+  const raw = await detokenizeWithTab(combined);
+  // raw is a newline-separated list of results matching token order
+  const lines = (raw || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const map = {};
+  for (let i = 0; i < cleanTokens.length; i++) {
+    map[cleanTokens[i]] = lines[i] || raw; // fallback to full result if single token
+  }
+  return map;
+}
+
 // Automate BlackTab page using tab method
 async function automateBlackTab(token) {
   console.log('🚀 Starting detokenization via tab method...');
@@ -143,8 +389,8 @@ async function automateBlackTab(token) {
 
 // Detokenize using automated tab (works with new dynamic form)
 async function detokenizeWithTab(token) {
-  // Strip all whitespace (newlines, spaces, tabs)
-  token = token.replace(/\s+/g, '');
+  // Strip all whitespace (newlines, spaces, tabs) except intentional newlines between tokens
+  token = token.replace(/[ \t\r]+/g, '');
   console.log('Cleaned token:', token.substring(0, 50) + '...', 'length:', token.length);
 
   const url = 'https://bt1.my.salesforce.com/admin/framework/action.apexp?entryPoint=BlackTab_UI&actionName=Detokenizer';
@@ -406,22 +652,23 @@ async function detokenizeWithTab(token) {
               }
 
               if (dataCellMatch && dataCellMatch[1]) {
-                // Decode HTML entities and strip tags
-                let result = dataCellMatch[1]
-                  .replace(/<[^>]+>/g, '')       // Remove HTML tags
-                  .replace(/&lt;/g, '<')          // Decode &lt;
-                  .replace(/&gt;/g, '>')          // Decode &gt;
-                  .replace(/&amp;/g, '&')         // Decode &amp;
-                  .replace(/&quot;/g, '"')        // Decode &quot;
-                  .replace(/&#39;/g, "'")         // Decode &#39;
-                  .replace(/&nbsp;/g, ' ')        // Decode &nbsp;
+                // Extract ALL dataCell values (one per token when batch)
+                const allDataCells = [...resultHTML.matchAll(/<td[^>]*class="dataCell"[^>]*>([\s\S]*?)<\/td>/gi)];
+                const decodeCell = (raw) => raw
+                  .replace(/<[^>]+>/g, '')
+                  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+                  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
                   .trim();
-
+                if (allDataCells.length > 1) {
+                  const values = allDataCells.map(m => decodeCell(m[1])).filter(Boolean);
+                  console.log('✅ Batch extracted', values.length, 'values');
+                  return { value: values.join('\n') };
+                }
+                const result = decodeCell(dataCellMatch[1]);
                 if (result.length === 0) {
                   console.log('⚠️ DataCell empty after decoding. Raw:', dataCellMatch[1].substring(0, 200));
                 } else {
-                  console.log('✅ Extracted from dataCell. Length:', result.length);
-                  console.log('Preview:', result.substring(0, 200) + (result.length > 200 ? '...' : ''));
+                  console.log('✅ Extracted from dataCell:', result.substring(0, 100));
                 }
                 return { value: result };
               }
