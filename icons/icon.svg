@@ -1,0 +1,22 @@
+<svg width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Green background -->
+  <rect width="128" height="128" fill="#00AA66"/>
+
+  <!-- Super simple bold unlock icon -->
+  <g transform="translate(64, 68)">
+    <!-- Thick open shackle -->
+    <path d="M -30 -25 L -30 -45 Q -30 -52 -22 -52 L 22 -52 Q 30 -52 30 -45 L 30 -30"
+          stroke="white"
+          stroke-width="18"
+          fill="none"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+
+    <!-- Thick lock body -->
+    <rect x="-32" y="-25" width="64" height="50" rx="6" fill="white"/>
+
+    <!-- Bold keyhole -->
+    <circle cx="0" cy="-5" r="10" fill="#00AA66"/>
+    <rect x="-4" y="0" width="8" height="18" fill="#00AA66"/>
+  </g>
+</svg>
