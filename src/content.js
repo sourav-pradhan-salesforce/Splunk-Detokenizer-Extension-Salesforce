@@ -7,18 +7,10 @@
   let lastClickTime = 0;
   let buttonTimeout = null;
 
-  // Splunk separates raw log fields with backtick characters as literal text.
-  // Consecutive tokens share a backtick: ...`token1`token2`token3`...
-  // Using a lookahead for the closing backtick means it is NOT consumed, so it
-  // remains available as the opening backtick for the next adjacent token.
-  // match[0] = "`token"  (opening backtick consumed, closing backtick NOT consumed)
-  // match[1] = "token"   (the token value, no backticks)
-  const TOKEN_PATTERN = /`(A-[^`]+)(?=`)/g;
-
-  // Return the token value from a TOKEN_PATTERN match (always group 1).
-  function tokenFromMatch(match) {
-    return match[1];
-  }
+  // Token pattern: A-YYMMDD-<base64> format
+  // Match A- followed by 6 digits (date), then hyphen, then base64-like chars
+  // Stop at non-base64 characters (letters, digits, +, /, =, _, -)
+  const TOKEN_PATTERN = /A-\d{6}-[A-Za-z0-9+/=_-]+/g;
 
   // Tooltip timing constants
   const TOOLTIP_SHOW_DELAY = 1500;  // 1.5 seconds before showing tooltip
@@ -74,14 +66,33 @@
     const themeToggle = document.createElement('button');
     themeToggle.className = 'detokenizer-theme-toggle';
     themeToggle.id = 'theme-toggle';
-    themeToggle.innerHTML = '🌙';
+    themeToggle.textContent = '🌙';
     themeToggle.title = 'Toggle theme';
+
+    // Auto-detokenize toggle
+    const autoToggle = document.createElement('label');
+    autoToggle.className = 'auto-detokenize-toggle';
+    autoToggle.style.cssText = 'display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;';
+
+    const autoCheckbox = document.createElement('input');
+    autoCheckbox.type = 'checkbox';
+    autoCheckbox.id = 'auto-detokenize-checkbox';
+    autoCheckbox.style.cursor = 'pointer';
+
+    const autoLabel = document.createElement('span');
+    autoLabel.textContent = 'Auto';
+    autoLabel.style.color = 'var(--text-color)';
+
+    autoToggle.appendChild(autoCheckbox);
+    autoToggle.appendChild(autoLabel);
+    autoToggle.title = 'Auto-detokenize all tokens on page';
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'detokenizer-close';
     closeBtn.id = 'close-panel';
     closeBtn.textContent = '✕';
 
+    headerButtons.appendChild(autoToggle);
     headerButtons.appendChild(themeToggle);
     headerButtons.appendChild(closeBtn);
 
@@ -266,6 +277,7 @@
     detokenizeBtn.addEventListener('click', detokenizeValue);
     copyBtn.addEventListener('click', copyResult);
     themeToggle.addEventListener('click', togglePanelTheme);
+    autoCheckbox.addEventListener('change', handleAutoDetokenize);
 
     // Make panel draggable
     makeDraggable(detokenizerPanel);
@@ -858,7 +870,6 @@
   function showPanel() {
     detokenizerPanel.classList.remove('hidden');
     document.getElementById('token-input').focus();
-    refreshHistory();
   }
 
   // Hide the detokenizer panel
@@ -872,6 +883,385 @@
     document.querySelector('.detokenizer-result-section').classList.add('hidden');
     document.querySelector('.detokenizer-loading').classList.add('hidden');
     document.querySelector('.detokenizer-error').classList.add('hidden');
+  }
+
+  // Add loading entry to page
+  async function addLoadingEntryToPage(rowContainer, token) {
+    let detokenizedBlock = rowContainer.querySelector('.detokenized-values-block');
+
+    if (!detokenizedBlock) {
+      // Create new block
+      detokenizedBlock = document.createElement('div');
+      detokenizedBlock.className = 'detokenized-values-block';
+
+      const header = document.createElement('div');
+      header.className = 'detokenized-block-header';
+
+      const icon = document.createElement('span');
+      icon.className = 'detokenized-block-icon';
+      icon.textContent = '🔓';
+
+      const label = document.createElement('span');
+      label.className = 'detokenized-block-label';
+      label.textContent = 'Detokenized Values:';
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'detokenized-block-close';
+      closeBtn.textContent = '✕';
+      closeBtn.title = 'Close';
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        detokenizedBlock.remove();
+      });
+
+      header.appendChild(icon);
+      header.appendChild(label);
+      header.appendChild(closeBtn);
+
+      const valuesList = document.createElement('div');
+      valuesList.className = 'detokenized-values-list';
+
+      detokenizedBlock.appendChild(header);
+      detokenizedBlock.appendChild(valuesList);
+      rowContainer.appendChild(detokenizedBlock);
+    }
+
+    const valuesList = detokenizedBlock.querySelector('.detokenized-values-list');
+
+    // Create loading entry
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'detokenized-value-entry detokenized-loading-entry';
+    loadingDiv.setAttribute('data-token', token);
+
+    const pair = document.createElement('div');
+    pair.className = 'detokenized-pair';
+
+    const row1 = document.createElement('div');
+    row1.className = 'detokenized-pair-row';
+    const label1 = document.createElement('span');
+    label1.className = 'detokenized-label';
+    label1.textContent = 'Original:';
+    const value1 = document.createElement('span');
+    value1.className = 'detokenized-original-value';
+    value1.textContent = token;
+    row1.appendChild(label1);
+    row1.appendChild(value1);
+
+    const row2 = document.createElement('div');
+    row2.className = 'detokenized-pair-row';
+    const label2 = document.createElement('span');
+    label2.className = 'detokenized-label';
+    label2.textContent = 'Detokenized:';
+    const spinnerContainer = document.createElement('div');
+    spinnerContainer.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    spinner.style.cssText = 'width: 16px; height: 16px; border-width: 2px;';
+    const loadingText = document.createElement('span');
+    loadingText.style.cssText = 'color: #718096; font-size: 13px;';
+    loadingText.textContent = 'Loading...';
+    spinnerContainer.appendChild(spinner);
+    spinnerContainer.appendChild(loadingText);
+    row2.appendChild(label2);
+    row2.appendChild(spinnerContainer);
+
+    pair.appendChild(row1);
+    pair.appendChild(row2);
+    loadingDiv.appendChild(pair);
+    valuesList.appendChild(loadingDiv);
+  }
+
+  // Replace loading with result
+  async function replaceLoadingWithResult(rowContainer, token, detokenizedValue) {
+    const detokenizedBlock = rowContainer.querySelector('.detokenized-values-block');
+    if (!detokenizedBlock) return;
+
+    const valuesList = detokenizedBlock.querySelector('.detokenized-values-list');
+    const loadingEntry = Array.from(valuesList.querySelectorAll('.detokenized-loading-entry'))
+      .find(el => el.getAttribute('data-token') === token);
+
+    if (!loadingEntry) return;
+
+    // Replace with result
+    loadingEntry.className = 'detokenized-value-entry';
+    loadingEntry.innerHTML = '';
+
+    const pair = document.createElement('div');
+    pair.className = 'detokenized-pair';
+
+    const row1 = document.createElement('div');
+    row1.className = 'detokenized-pair-row';
+    const label1 = document.createElement('span');
+    label1.className = 'detokenized-label';
+    label1.textContent = 'Original:';
+    const value1 = document.createElement('span');
+    value1.className = 'detokenized-original-value';
+    value1.textContent = token;
+    row1.appendChild(label1);
+    row1.appendChild(value1);
+
+    const row2 = document.createElement('div');
+    row2.className = 'detokenized-pair-row';
+    const label2 = document.createElement('span');
+    label2.className = 'detokenized-label';
+    label2.textContent = 'Detokenized:';
+    const value2 = document.createElement('span');
+    value2.className = 'detokenized-value-text';
+    value2.textContent = detokenizedValue;
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'detokenized-copy-btn';
+    copyBtn.textContent = '📋';
+    copyBtn.title = 'Copy';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(detokenizedValue);
+      copyBtn.textContent = '✓';
+      setTimeout(() => copyBtn.textContent = '📋', 1500);
+    });
+    row2.appendChild(label2);
+    row2.appendChild(value2);
+    row2.appendChild(copyBtn);
+
+    pair.appendChild(row1);
+    pair.appendChild(row2);
+    loadingEntry.appendChild(pair);
+  }
+
+  // Replace loading with error
+  async function replaceLoadingWithError(rowContainer, token, errorMsg) {
+    const detokenizedBlock = rowContainer.querySelector('.detokenized-values-block');
+    if (!detokenizedBlock) return;
+
+    const valuesList = detokenizedBlock.querySelector('.detokenized-values-list');
+    const loadingEntry = Array.from(valuesList.querySelectorAll('.detokenized-loading-entry'))
+      .find(el => el.getAttribute('data-token') === token);
+
+    if (!loadingEntry) return;
+
+    // Replace with error
+    loadingEntry.className = 'detokenized-value-entry';
+    loadingEntry.style.backgroundColor = '#fee';
+    loadingEntry.innerHTML = '';
+
+    const pair = document.createElement('div');
+    pair.className = 'detokenized-pair';
+
+    const row1 = document.createElement('div');
+    row1.className = 'detokenized-pair-row';
+    const label1 = document.createElement('span');
+    label1.className = 'detokenized-label';
+    label1.textContent = 'Original:';
+    const value1 = document.createElement('span');
+    value1.className = 'detokenized-original-value';
+    value1.textContent = token;
+    row1.appendChild(label1);
+    row1.appendChild(value1);
+
+    const row2 = document.createElement('div');
+    row2.className = 'detokenized-pair-row';
+    const label2 = document.createElement('span');
+    label2.className = 'detokenized-label';
+    label2.textContent = 'Error:';
+    const errorText = document.createElement('span');
+    errorText.style.cssText = 'color: #c53030; font-size: 13px;';
+    errorText.textContent = errorMsg;
+    row2.appendChild(label2);
+    row2.appendChild(errorText);
+
+    pair.appendChild(row1);
+    pair.appendChild(row2);
+    loadingEntry.appendChild(pair);
+  }
+
+  // Add detokenized value to page (reusable function)
+  async function addDetokenizedValueToPage(rowContainer, token, detokenizedValue) {
+    let detokenizedBlock = rowContainer.querySelector('.detokenized-values-block');
+
+    if (!detokenizedBlock) {
+      // Create new block
+      detokenizedBlock = document.createElement('div');
+      detokenizedBlock.className = 'detokenized-values-block';
+
+      const header = document.createElement('div');
+      header.className = 'detokenized-block-header';
+
+      const icon = document.createElement('span');
+      icon.className = 'detokenized-block-icon';
+      icon.textContent = '🔓';
+
+      const label = document.createElement('span');
+      label.className = 'detokenized-block-label';
+      label.textContent = 'Detokenized Values:';
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'detokenized-block-close';
+      closeBtn.textContent = '✕';
+      closeBtn.title = 'Close';
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        detokenizedBlock.remove();
+      });
+
+      header.appendChild(icon);
+      header.appendChild(label);
+      header.appendChild(closeBtn);
+
+      const valuesList = document.createElement('div');
+      valuesList.className = 'detokenized-values-list';
+
+      detokenizedBlock.appendChild(header);
+      detokenizedBlock.appendChild(valuesList);
+      rowContainer.appendChild(detokenizedBlock);
+    }
+
+    const valuesList = detokenizedBlock.querySelector('.detokenized-values-list');
+
+    // Create entry
+    const entryDiv = document.createElement('div');
+    entryDiv.className = 'detokenized-value-entry';
+    entryDiv.setAttribute('data-token', escapeHtml(token));
+
+    const pair = document.createElement('div');
+    pair.className = 'detokenized-pair';
+
+    const row1 = document.createElement('div');
+    row1.className = 'detokenized-pair-row';
+    const label1 = document.createElement('span');
+    label1.className = 'detokenized-label';
+    label1.textContent = 'Original:';
+    const value1 = document.createElement('span');
+    value1.className = 'detokenized-original-value';
+    value1.textContent = token;
+    row1.appendChild(label1);
+    row1.appendChild(value1);
+
+    const row2 = document.createElement('div');
+    row2.className = 'detokenized-pair-row';
+    const label2 = document.createElement('span');
+    label2.className = 'detokenized-label';
+    label2.textContent = 'Detokenized:';
+    const value2 = document.createElement('span');
+    value2.className = 'detokenized-value-text';
+    value2.textContent = detokenizedValue;
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'detokenized-copy-btn';
+    copyBtn.textContent = '📋';
+    copyBtn.title = 'Copy';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(detokenizedValue);
+      copyBtn.textContent = '✓';
+      setTimeout(() => copyBtn.textContent = '📋', 1500);
+    });
+    row2.appendChild(label2);
+    row2.appendChild(value2);
+    row2.appendChild(copyBtn);
+
+    pair.appendChild(row1);
+    pair.appendChild(row2);
+    entryDiv.appendChild(pair);
+    valuesList.appendChild(entryDiv);
+  }
+
+  // Auto-detokenize all tokens on page
+  async function handleAutoDetokenize(event) {
+    const isEnabled = event.target.checked;
+    console.log('Auto-detokenize:', isEnabled ? 'enabled' : 'disabled');
+
+    if (!isEnabled) return;
+
+    // Find all tokens in DOM elements (not innerText which has line breaks)
+    const eventElements = document.querySelectorAll('.raw-event, td.event');
+    const tokens = [];
+
+    for (const el of eventElements) {
+      // Get text without line breaks inserted by innerText
+      const text = el.textContent.replace(/\s+/g, ' '); // Normalize whitespace
+      const matches = text.match(TOKEN_PATTERN);
+      if (matches) {
+        tokens.push(...matches);
+      }
+    }
+
+    if (tokens.length === 0) {
+      console.log('No tokens found on page');
+      return;
+    }
+
+    // Remove duplicates
+    const uniqueTokens = [...new Set(tokens)];
+    console.log(`Found ${uniqueTokens.length} unique tokens on page`);
+
+    // Detokenize each token (limit to prevent overload)
+    const maxTokens = 50;
+    const tokensToProcess = uniqueTokens.slice(0, maxTokens);
+
+    for (const token of tokensToProcess) {
+      // Find ALL elements containing this token (not just first)
+      const elements = document.querySelectorAll('.raw-event, td.event');
+      const targetElements = [];
+
+      for (const el of elements) {
+        if (el.textContent.includes(token)) {
+          // Check if already detokenized in this specific element
+          const existingBlock = el.querySelector('.detokenized-values-block');
+          let alreadyExists = false;
+
+          if (existingBlock) {
+            const entries = existingBlock.querySelectorAll('.detokenized-value-entry');
+            for (const entry of entries) {
+              const entryToken = entry.getAttribute('data-token');
+              if (entryToken === token) {
+                alreadyExists = true;
+                break;
+              }
+            }
+          }
+
+          if (!alreadyExists) {
+            targetElements.push(el);
+          }
+        }
+      }
+
+      if (targetElements.length === 0) continue;
+
+      // Show loading state immediately in ALL matching elements
+      for (const targetElement of targetElements) {
+        await addLoadingEntryToPage(targetElement, token);
+      }
+
+      // Detokenize this token once (async, don't wait)
+      chrome.runtime.sendMessage({
+        action: 'detokenize',
+        token: token
+      }).then(async (response) => {
+        if (response && response.success) {
+          // Update ALL matching elements with result
+          for (const targetElement of targetElements) {
+            await replaceLoadingWithResult(targetElement, token, response.detokenizedValue);
+          }
+          await saveToHistory(token, response.detokenizedValue);
+        } else {
+          // Update ALL matching elements with error
+          for (const targetElement of targetElements) {
+            await replaceLoadingWithError(targetElement, token, response?.error || 'Failed');
+          }
+        }
+      }).catch(async (error) => {
+        console.error('Auto-detokenize failed for token:', token.substring(0, 30), error);
+        // Update ALL matching elements with error
+        for (const targetElement of targetElements) {
+          await replaceLoadingWithError(targetElement, token, error.message);
+        }
+      });
+
+      // Small delay before starting next token
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    await refreshHistory();
+    console.log('Auto-detokenization complete');
   }
 
   // Detokenize value using BlackTab
@@ -1075,15 +1465,8 @@
         notification.classList.remove('show');
         setTimeout(() => notification.remove(), 300);
       }, 5000);
-    } else if (request.action === 'setAutoDetokenize') {
-      autoDetokenizeEnabled = request.enabled;
-      if (request.enabled) {
-        startAutoDetokenize();
-      } else {
-        stopAutoDetokenize();
-      }
     }
-    return false;
+    return true;
   }
 
   // Toggle panel theme
@@ -1173,22 +1556,95 @@
       return;
     }
 
-    // Find parent .raw-event container (this has full textContent with backtick delimiters)
+    // Find parent .raw-event container (Splunk event row)
     const rawEventContainer = element.closest('.raw-event') || element.closest('td.event');
-    const searchRoot = rawEventContainer || element;
-    const fullText = searchRoot.textContent || '';
-    const hoveredText = (element.textContent || '').trim();
+    if (!rawEventContainer) {
+      // Not in a Splunk event, check current element only
+      const textContent = element.textContent || '';
+      const matches = textContent.matchAll(TOKEN_PATTERN);
+      let foundToken = null;
 
-    // Find a token whose value contains the hovered element's text fragment.
-    // With backtick delimiters the full token is always in group 1 of the match.
-    let foundToken = null;
-    let isActuallyOverToken = false;
-    for (const match of fullText.matchAll(TOKEN_PATTERN)) {
-      const token = tokenFromMatch(match); // group 1 — the actual token string
-      if (hoveredText.length > 0 && token.includes(hoveredText)) {
-        foundToken = token;
-        isActuallyOverToken = true;
+      for (const match of matches) {
+        foundToken = match[0];
         break;
+      }
+
+      if (foundToken) {
+        // Check if token already displayed in panel
+        if (isTokenAlreadyDisplayed(foundToken)) {
+          isHoveringToken = false;
+          clearTooltipShowTimeout();
+          scheduleTooltipHide();
+          return;
+        }
+
+        isHoveringToken = true;
+        clearTooltipHideTimeout();
+
+        // If it's a different token, schedule showing it after delay
+        if (foundToken !== currentHoveredToken && foundToken !== pendingToken) {
+          clearTooltipShowTimeout();
+          // Use viewport coordinates directly for fixed positioning
+          scheduleTooltipShow(foundToken, e.clientX, e.clientY, element);
+        }
+        // If tooltip already showing for this token, keep it visible
+        else if (foundToken === currentHoveredToken) {
+          clearTooltipShowTimeout();
+        }
+      } else {
+        isHoveringToken = false;
+        clearTooltipShowTimeout();
+        scheduleTooltipHide();
+      }
+      return;
+    }
+
+    // Get full text from raw-event container (this reconstructs split tokens)
+    const fullText = rawEventContainer.textContent || '';
+
+    // Find all tokens in the full text
+    const matches = fullText.matchAll(TOKEN_PATTERN);
+    let foundToken = null;
+
+    // Get the specific span or text node under cursor
+    const hoveredText = element.textContent || '';
+
+    // Find which token the mouse is over by checking if any token contains the hovered text
+    let isActuallyOverToken = false;
+    for (const match of matches) {
+      const token = match[0];
+      const trimmedHovered = hoveredText.trim();
+
+      // More aggressive matching - check multiple conditions
+      if (trimmedHovered.length > 0) {
+        // Direct substring match (token contains hovered text)
+        if (token.includes(trimmedHovered)) {
+          foundToken = token;
+          isActuallyOverToken = true;
+          break;
+        }
+
+        // Hovered text contains start of token
+        if (trimmedHovered.includes(token.substring(0, Math.min(15, token.length)))) {
+          foundToken = token;
+          isActuallyOverToken = true;
+          break;
+        }
+
+        // Token starts with hovered text
+        if (token.startsWith(trimmedHovered)) {
+          foundToken = token;
+          isActuallyOverToken = true;
+          break;
+        }
+
+        // Partial match at end (for split tokens) - check last 10 chars
+        const tokenEnd = token.substring(Math.max(0, token.length - 10));
+        if (trimmedHovered.startsWith(tokenEnd) || tokenEnd.startsWith(trimmedHovered.substring(0, 5))) {
+          foundToken = token;
+          isActuallyOverToken = true;
+          break;
+        }
       }
     }
 
@@ -1209,7 +1665,7 @@
       if (foundToken !== currentHoveredToken && foundToken !== pendingToken) {
         clearTooltipShowTimeout();
         // Use viewport coordinates directly for fixed positioning
-        scheduleTooltipShow(foundToken, e.clientX, e.clientY, searchRoot);
+        scheduleTooltipShow(foundToken, e.clientX, e.clientY, rawEventContainer);
       }
       // If tooltip already showing for this token, keep it visible
       else if (foundToken === currentHoveredToken) {
@@ -1717,239 +2173,6 @@
 
     console.log('✅ Detokenized value entry added to block');
   }
-
-  // ── Auto-Detokenize ────────────────────────────────────────────────────────
-
-  let autoDetokenizeEnabled = false;
-  const autoProcessed = new Set();
-  const autoQueue = [];
-  let autoRunning = false;
-  let autoObserver = null;
-
-  chrome.storage.local.get(['autoDetokenize'], (result) => {
-    if (result.autoDetokenize) {
-      autoDetokenizeEnabled = true;
-      startAutoDetokenize();
-    }
-  });
-
-  function startAutoDetokenize() {
-    if (autoObserver) return; // already running
-    autoProcessed.clear();
-    autoQueue.length = 0;
-    console.log('🔄 Auto-detokenize started, scanning page...');
-    scanAndQueueTokens(document.body);
-    console.log('🔍 Scan complete. Queue length:', autoQueue.length);
-    autoObserver = new MutationObserver((mutations) => {
-      if (!autoDetokenizeEnabled) return;
-      let hasNew = false;
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            scanAndQueueTokens(node);
-            hasNew = true;
-          }
-        }
-      }
-      if (hasNew) drainQueue();
-    });
-    autoObserver.observe(document.body, { childList: true, subtree: true });
-    drainQueue();
-  }
-
-  function stopAutoDetokenize() {
-    if (autoObserver) {
-      autoObserver.disconnect();
-      autoObserver = null;
-    }
-    autoQueue.length = 0;
-  }
-
-  // Scan in reverse document order (deepest elements first) to find the tightest
-  // container whose textContent has the full token. Mark ancestors so they are skipped.
-  // Include root itself so MutationObserver-added .raw-event nodes are not missed.
-  function scanAndQueueTokens(root) {
-    const SKIP_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT'];
-    const descendants = root.querySelectorAll ? [...root.querySelectorAll('*')] : [];
-    const all = [...descendants.reverse(), root]; // deepest children first, then root itself
-    for (const el of all) {
-      if (SKIP_TAGS.includes(el.tagName)) continue;
-      if (el.closest('.detokenizer-panel, .detokenizer-notification, .detokenized-values-block, .detokenizer-tooltip')) continue;
-      if (el.classList && (el.classList.contains('tooltip-token') || el.classList.contains('detokenizer-tooltip'))) continue;
-      if (autoProcessed.has(el)) continue;
-      TOKEN_PATTERN.lastIndex = 0;
-      if (!TOKEN_PATTERN.test(el.textContent || '')) continue;
-      // This is the deepest element containing the full token — queue it
-      console.log('📌 Queued:', el.tagName, el.className.toString().substring(0, 40), '| text:', (el.textContent || '').substring(0, 60));
-      autoProcessed.add(el);
-      autoQueue.push(el);
-      // Mark all ancestors so they don't get queued as well
-      let parent = el.parentElement;
-      while (parent) { autoProcessed.add(parent); parent = parent.parentElement; }
-    }
-  }
-
-  async function drainQueue() {
-    if (autoRunning) return;
-    autoRunning = true;
-
-    // Collect ALL pending elements and their token/placeholder pairs at once
-    const allPending = []; // [{token, placeholder}]
-
-    while (autoQueue.length > 0) {
-      const el = autoQueue.shift();
-      if (!el.parentNode || !document.contains(el)) continue;
-
-      const text = el.textContent || '';
-      TOKEN_PATTERN.lastIndex = 0;
-      const matches = [...text.matchAll(TOKEN_PATTERN)];
-      if (matches.length === 0) continue;
-
-      const frag = document.createDocumentFragment();
-      let lastIndex = 0;
-
-      for (const match of matches) {
-        if (match.index > lastIndex) {
-          frag.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-        }
-        // match[0] = "`token`" (with backticks), match[1] = "token" (without)
-        const token = tokenFromMatch(match);
-        const placeholder = document.createElement('span');
-        placeholder.textContent = '⏳';
-        placeholder.title = token;
-        placeholder.style.cssText = 'opacity:0.6; font-size:0.85em;';
-        frag.appendChild(placeholder);
-        allPending.push({ token, placeholder });
-        lastIndex = match.index + match[0].length; // skip the whole `token` including backticks
-      }
-
-      if (lastIndex < text.length) {
-        frag.appendChild(document.createTextNode(text.slice(lastIndex)));
-      }
-
-      while (el.firstChild) el.removeChild(el.firstChild);
-      el.appendChild(frag);
-    }
-
-    if (allPending.length > 0 && autoDetokenizeEnabled) {
-      const uniqueTokens = [...new Set(allPending.map(p => p.token))];
-
-      // Build a map of token → [placeholders] for fast lookup
-      const placeholderMap = {};
-      for (const { token, placeholder } of allPending) {
-        if (!placeholderMap[token]) placeholderMap[token] = [];
-        placeholderMap[token].push(placeholder);
-      }
-
-      // Check cache first
-      const cacheData = await chrome.storage.local.get(uniqueTokens);
-      const cachedResults = {};
-      const uncachedTokens = [];
-
-      for (const token of uniqueTokens) {
-        const cached = cacheData[token];
-        if (cached && cached.value && Date.now() - cached.timestamp < 3600000) {
-          // Valid cache hit
-          cachedResults[token] = cached.value;
-          const placeholders = placeholderMap[token] || [];
-          for (const placeholder of placeholders) {
-            if (!placeholder.isConnected) continue;
-            const span = document.createElement('span');
-            span.textContent = cached.value;
-            span.title = 'Detokenized from: ' + token;
-            span.style.cssText = 'background:#FFE033; border-radius:3px; padding:2px 6px; margin:0 2px; font-weight:700; color:#000000; font-size:0.95em; outline:1px solid #B8A000;';
-            placeholder.parentNode.replaceChild(span, placeholder);
-            saveToHistory(token, cached.value);
-          }
-        } else {
-          uncachedTokens.push(token);
-        }
-      }
-
-      console.log(`🚀 ${Object.keys(cachedResults).length} tokens from cache, ${uncachedTokens.length} need fetch`);
-
-      // Only send uncached tokens to background
-      if (uncachedTokens.length > 0) {
-        // Listen for progressive results via storage changes
-        const resolved = new Set();
-        const storageListener = (changes) => {
-          if (!changes.autoDetokenResults) return;
-          const results = changes.autoDetokenResults.newValue || {};
-          for (const [token, value] of Object.entries(results)) {
-            if (resolved.has(token)) continue;
-            resolved.add(token);
-            const placeholders = placeholderMap[token] || [];
-            for (const placeholder of placeholders) {
-              if (!placeholder.isConnected) continue;
-              const span = document.createElement('span');
-              span.textContent = value;
-              span.title = 'Detokenized from: ' + token;
-              span.style.cssText = 'background:#FFE033; border-radius:3px; padding:2px 6px; margin:0 2px; font-weight:700; color:#000000; font-size:0.95em; outline:1px solid #B8A000;';
-              placeholder.parentNode.replaceChild(span, placeholder);
-              saveToHistory(token, value);
-            }
-          }
-        };
-        chrome.storage.onChanged.addListener(storageListener);
-
-        // Kick off background processing — fire and forget
-        chrome.runtime.sendMessage({ action: 'detokenizeBatch', tokens: uncachedTokens }).catch(() => {});
-
-        // Clean up listener after 5 minutes max
-        setTimeout(() => {
-          chrome.storage.onChanged.removeListener(storageListener);
-          // Restore any unresolved placeholders for uncached tokens only
-          for (const token of uncachedTokens) {
-            const placeholders = placeholderMap[token] || [];
-            for (const placeholder of placeholders) {
-              if (placeholder.isConnected && placeholder.textContent === '⏳') {
-                placeholder.textContent = token;
-              }
-            }
-          }
-        }, 300000);
-      }
-    }
-
-    autoRunning = false;
-  }
-
-  async function autoResolveAndReplace(token, placeholder) {
-    const MAX_RETRIES = 3;
-    let lastError;
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        if (attempt > 0) await new Promise(r => setTimeout(r, 1500 * attempt));
-        const response = await chrome.runtime.sendMessage({ action: 'detokenize', token });
-        if (response && response.success) {
-          console.log('✅ Auto-replacing token in DOM:', token.substring(0, 20), '→', response.detokenizedValue);
-          if (placeholder.isConnected) {
-            const span = document.createElement('span');
-            span.textContent = response.detokenizedValue;
-            span.title = 'Detokenized from: ' + token;
-            span.style.cssText = 'background:#FFE033; border-radius:3px; padding:2px 6px; margin:0 2px; font-weight:700; color:#000000; font-size:0.95em; outline:1px solid #B8A000;';
-            placeholder.parentNode.replaceChild(span, placeholder);
-          } else {
-            console.warn('⚠️ Placeholder no longer in DOM — Splunk re-rendered the row');
-          }
-          return;
-        }
-        lastError = (response && response.error) || 'Failed';
-        break;
-      } catch (e) {
-        lastError = e.message || 'Error';
-        if (!e.message || !e.message.includes('message channel closed')) break;
-      }
-    }
-    if (placeholder.isConnected) {
-      const span = document.createElement('span');
-      span.textContent = token;
-      span.title = lastError;
-      placeholder.parentNode.replaceChild(span, placeholder);
-    }
-  }
-
-  // ── End Auto-Detokenize ────────────────────────────────────────────────────
 
   // Add keyboard shortcut
   document.addEventListener('keydown', (e) => {

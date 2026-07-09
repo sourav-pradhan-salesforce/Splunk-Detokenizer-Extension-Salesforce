@@ -2,30 +2,14 @@
 document.addEventListener('DOMContentLoaded', () => {
   const openPanelBtn = document.getElementById('open-panel');
   const themeToggle = document.getElementById('theme-toggle');
-  const autoToggle = document.getElementById('auto-toggle');
   const body = document.body;
 
   // Load saved theme preference
-  chrome.storage.local.get(['theme', 'autoDetokenize'], (result) => {
+  chrome.storage.local.get(['theme'], (result) => {
     const theme = result.theme || 'dark';
     body.className = `${theme}-mode`;
     updateThemeIcon(theme);
-    if (autoToggle) autoToggle.checked = !!result.autoDetokenize;
   });
-
-  // Auto-detokenize toggle
-  if (autoToggle) {
-    autoToggle.addEventListener('change', () => {
-      const enabled = autoToggle.checked;
-      chrome.storage.local.set({ autoDetokenize: enabled });
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const activeTab = tabs[0];
-        if (activeTab && activeTab.url && activeTab.url.includes('splunk-web.log-analytics.monitoring')) {
-          chrome.tabs.sendMessage(activeTab.id, { action: 'setAutoDetokenize', enabled }).catch(() => {});
-        }
-      });
-    });
-  }
 
   // Theme toggle
   themeToggle.addEventListener('click', () => {
@@ -50,7 +34,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const activeTab = tabs[0];
 
       if (activeTab && activeTab.url.includes('splunk-web.log-analytics.monitoring')) {
-        chrome.tabs.sendMessage(activeTab.id, { action: 'openPanel' }).catch(() => {});
+        chrome.tabs.sendMessage(activeTab.id, {
+          action: 'openPanel'
+        });
         window.close();
       } else {
         alert('Please navigate to the Splunk page first.');

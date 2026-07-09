@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Version bump for release alignment
 
+## [1.1.0] - 2026-07-09
+
+### Added
+- Auto-detokenize feature: toggle to automatically find and detokenize all tokens on page
+- Loading states for each token during auto-detokenize with real-time updates
+- Parallel token processing - shows loading spinner immediately, updates when result ready
+- Token pattern scanning from DOM elements instead of `innerText` to avoid line-break issues
+
+### Fixed
+- Token capture truncation: scan specific DOM elements (`.raw-event`, `td.event`) instead of `document.body.innerText`
+- Whitespace normalization: `textContent.replace(/\s+/g, ' ')` prevents tokens split by line breaks
+- Incomplete token detection from formatted HTML text
+
+### Technical Details
+- Auto-detokenize scans up to 50 unique tokens per page
+- 300ms delay between token submissions to avoid rate limiting
+- `addLoadingEntryToPage()` shows spinner immediately
+- `replaceLoadingWithResult()` / `replaceLoadingWithError()` update UI asynchronously
+- DOM element targeting: `.raw-event` and `td.event` classes for Splunk results
+
 ## [1.0.1] - 2026-07-09
 
 ### Fixed
