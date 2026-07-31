@@ -1182,16 +1182,21 @@
     const fullText = searchRoot.textContent || '';
     const hoveredText = (element.textContent || '').trim();
 
-    // Find a token whose value contains the hovered element's text fragment.
-    // With backtick delimiters the full token is always in group 1 of the match.
+    // Find the token whose value contains the hovered element's text fragment.
+    // When multiple tokens match (e.g. shared prefix), pick the one with the
+    // shortest token length — i.e. the most specific (tightest) match. This
+    // prevents the first token in the list from greedily matching the start of
+    // an adjacent token that shares a prefix.
     let foundToken = null;
     let isActuallyOverToken = false;
     for (const match of fullText.matchAll(TOKEN_PATTERN)) {
       const token = tokenFromMatch(match); // group 1 — the actual token string
       if (hoveredText.length > 0 && token.includes(hoveredText)) {
-        foundToken = token;
-        isActuallyOverToken = true;
-        break;
+        // Prefer the shortest matching token (tightest/most-specific match).
+        if (!foundToken || token.length < foundToken.length) {
+          foundToken = token;
+          isActuallyOverToken = true;
+        }
       }
     }
 

@@ -172,6 +172,20 @@ async function handleBatchDetokenize(tokens) {
           const cleanToken = token.replace(/\s+/g, '');
           console.log(`Processing token ${uncached.indexOf(token) + 1}/${uncached.length}: ${cleanToken.substring(0, 20)}...`);
 
+          // Capture current Unique Run ID before submitting — used to detect fresh results
+          const prevRunIdScript = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const cells = document.querySelectorAll('td.dataCol');
+              for (const cell of cells) {
+                const txt = cell.textContent.trim();
+                if (/^\w{10,}_\w{10,}$/.test(txt)) return txt;
+              }
+              return '__NONE__';
+            }
+          });
+          const prevRunId = prevRunIdScript?.[0]?.result || '__NONE__';
+
           // Fill textarea and click Run
           const fillResult = await chrome.scripting.executeScript({
             target: { tabId },
@@ -199,19 +213,24 @@ async function handleBatchDetokenize(tokens) {
 
           if (!fillResult?.[0]?.result) { console.warn('Could not fill/run for token', cleanToken.substring(0, 20)); continue; }
 
-          // Wait for result
+          // Wait for a NEW Unique Run ID — guarantees the result is for the current token,
+          // not leftover from the previous token still showing on the page.
           let found = false;
-          for (let i = 0; i < 20; i++) {
+          for (let i = 0; i < 30; i++) {
             await sleep(1000);
             const check = await chrome.scripting.executeScript({
               target: { tabId },
-              func: () => {
-                const html = document.body.innerHTML || '';
-                const resultsMatch = html.match(/Unique Run ID[\s\S]{100,}/i);
-                if (resultsMatch && (resultsMatch[0].includes('@') || resultsMatch[0].match(/<td[^>]*>[^<]{10,}<\/td>/))) return true;
-                if (html.match(/Errors[^<]*<[^>]*>([A-Z_]+)</i)) return true;
+              func: (oldRunId) => {
+                const cells = document.querySelectorAll('td.dataCol');
+                for (const cell of cells) {
+                  const txt = cell.textContent.trim();
+                  if (/^\w{10,}_\w{10,}$/.test(txt) && txt !== oldRunId) return true;
+                }
+                // Also check Errors section as a terminal state
+                if (document.body.innerHTML.match(/Errors[^<]*<[^>]*>([A-Z_]+)</i)) return true;
                 return false;
-              }
+              },
+              args: [prevRunId]
             });
             if (check?.[0]?.result) { found = true; break; }
           }
