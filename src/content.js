@@ -1180,22 +1180,65 @@
     const rawEventContainer = element.closest('.raw-event') || element.closest('td.event');
     const searchRoot = rawEventContainer || element;
     const fullText = searchRoot.textContent || '';
-    const hoveredText = (element.textContent || '').trim();
 
-    // Find the token whose value contains the hovered element's text fragment.
-    // When multiple tokens match (e.g. shared prefix), pick the one with the
-    // shortest token length — i.e. the most specific (tightest) match. This
-    // prevents the first token in the list from greedily matching the start of
-    // an adjacent token that shares a prefix.
+    // Get exact character offset of the cursor within fullText using caret APIs.
+    // This is the only reliable way to pick the right token when two tokens share
+    // a prefix or when element.textContent spans multiple tokens.
+    let cursorOffset = -1;
+    try {
+      let caretRange = null;
+      if (document.caretRangeFromPoint) {
+        caretRange = document.caretRangeFromPoint(e.clientX, e.clientY);
+      } else if (document.caretPositionFromPoint) {
+        const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+        if (pos) {
+          caretRange = document.createRange();
+          caretRange.setStart(pos.offsetNode, pos.offset);
+        }
+      }
+      if (caretRange && caretRange.startContainer && caretRange.startContainer.nodeType === Node.TEXT_NODE) {
+        // Walk text nodes in searchRoot in DOM order to compute absolute offset
+        let accumulated = 0;
+        const walker = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node === caretRange.startContainer) {
+            cursorOffset = accumulated + caretRange.startOffset;
+            break;
+          }
+          accumulated += node.textContent.length;
+        }
+      }
+    } catch (_) { /* caretRangeFromPoint may throw cross-origin; fall through to text fallback */ }
+
+    // Find which token the cursor character offset falls inside.
+    // TOKEN_PATTERN: match[0] = "`token" (opening backtick consumed, closing NOT consumed)
+    //                match[1] = "token" value
+    //                match.index = position of opening backtick in fullText
+    // Token occupies fullText[match.index+1 .. match.index+match[0].length)
     let foundToken = null;
     let isActuallyOverToken = false;
+    const hoveredText = (element.textContent || '').trim();
     for (const match of fullText.matchAll(TOKEN_PATTERN)) {
-      const token = tokenFromMatch(match); // group 1 — the actual token string
-      if (hoveredText.length > 0 && token.includes(hoveredText)) {
-        // Prefer the shortest matching token (tightest/most-specific match).
-        if (!foundToken || token.length < foundToken.length) {
+      const token = tokenFromMatch(match);
+      const tokenStart = match.index + 1;                  // skip opening backtick
+      const tokenEnd   = match.index + match[0].length;    // exclusive (closing backtick pos)
+
+      if (cursorOffset >= 0) {
+        // Precise: cursor must be inside this token's character range
+        if (cursorOffset >= tokenStart && cursorOffset < tokenEnd) {
           foundToken = token;
           isActuallyOverToken = true;
+          break; // exact positional match — no ambiguity
+        }
+      } else {
+        // Fallback (caret API unavailable): text containment, prefer longest match
+        // (longest = most complete fragment = least likely to be a shared prefix)
+        if (hoveredText.length > 0 && token.includes(hoveredText)) {
+          if (!foundToken || token.length > foundToken.length) {
+            foundToken = token;
+            isActuallyOverToken = true;
+          }
         }
       }
     }
