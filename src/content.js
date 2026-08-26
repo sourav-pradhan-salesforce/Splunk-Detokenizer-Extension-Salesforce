@@ -202,9 +202,62 @@
     content.appendChild(errorSection);
     content.appendChild(historySection);
 
+    // Footer section
+    const footer = document.createElement('div');
+    footer.className = 'detokenizer-footer';
+
+    const madeWith = document.createElement('div');
+    madeWith.className = 'footer-made-with';
+    madeWith.appendChild(document.createTextNode('Created by'));
+    const madeWithStrong = document.createElement('strong');
+    madeWithStrong.textContent = ' Team';
+    madeWith.appendChild(madeWithStrong);
+
+    const footerRow = document.createElement('div');
+    footerRow.className = 'footer-content-row';
+
+    const feedbackText = document.createElement('span');
+    feedbackText.className = 'footer-feedback-text';
+    feedbackText.textContent = 'For feedback, reach out to:';
+
+    const teamLinks = document.createElement('span');
+    teamLinks.className = 'footer-team-links';
+
+    const team = [
+      { name: 'Ashish Sharma', slack: 'https://salesforce.enterprise.slack.com/team/U01G1C1J3EJ' },
+      { name: 'Sourav Pradhan', slack: 'https://salesforce.enterprise.slack.com/team/U061JUXGRV5' },
+      { name: 'Ram Krishan', slack: 'https://salesforce.enterprise.slack.com/team/U05QYDW7UTW' },
+      { name: 'Sriharsha Chagarlamudi', slack: 'https://salesforce.enterprise.slack.com/team/U03P4336EKZ' }
+    ];
+
+    team.forEach((member, index) => {
+      const link = document.createElement('a');
+      link.href = member.slack;
+      link.textContent = '@' + member.name.toLowerCase().replace(' ', '');
+      link.className = 'footer-slack-link';
+      link.target = '_blank';
+      link.title = 'Message ' + member.name + ' on Slack';
+
+      teamLinks.appendChild(link);
+
+      if (index < team.length - 1) {
+        const separator = document.createElement('span');
+        separator.textContent = ' • ';
+        separator.className = 'footer-separator';
+        teamLinks.appendChild(separator);
+      }
+    });
+
+    footerRow.appendChild(feedbackText);
+    footerRow.appendChild(teamLinks);
+
+    footer.appendChild(madeWith);
+    footer.appendChild(footerRow);
+
     // Assemble panel
     detokenizerPanel.appendChild(header);
     detokenizerPanel.appendChild(content);
+    detokenizerPanel.appendChild(footer);
 
     document.body.appendChild(detokenizerPanel);
 
